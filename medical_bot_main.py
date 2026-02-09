@@ -46,6 +46,15 @@ generation_config = {
 
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
+# ПРИОРИТЕТ МОДЕЛЕЙ (от САМОЙ ТОЧНОЙ для медицины к худшей)
+# Критерий: ТОЧНОСТЬ > СКОРОСТЬ, потому что медицина критична
+MODEL_PRIORITY = [
+    "gemini-3-flash",              # 1️⃣ САМАЯ УМНАЯ - новейшая, максимум точности и понимания
+    "gemini-2.5-flash",            # 2️⃣ ОЧЕНЬ ТОЧНАЯ - мощная, детальная, надёжная
+    "gemini-2.5-flash-lite",       # 3️⃣ ХОРОШАЯ - точная и экономная
+    "gemini-1.5-flash",            # 4️⃣ РЕЗЕРВНАЯ - старая версия, но работает
+]
+
 # ═══════════════════════════════════════════════════════════════
 # 📚 СИСТЕМНЫЕ ПРОМТЫ
 # ═══════════════════════════════════════════════════════════════
@@ -220,84 +229,105 @@ SYSTEM_PROMPT_OBSTETRICS = """Ты — профессиональный акуш
 - МАКСИМУМ 3000 символов!"""
 
 # ═══════════════════════════════════════════════════════════════
-# 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ
+# 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ (С ПРИОРИТЕТОМ НА ТОЧНОСТЬ)
 # ═══════════════════════════════════════════════════════════════
 
 class ModelManager:
-    """Управляет доступными моделями и их лимитами."""
+    """Управляет доступными моделями с приоритетом на ТОЧНОСТЬ."""
     
     def __init__(self):
         self.api_key_index = 0
         self.current_model = None
         self.current_model_name = "Searching..."
+        # Отслеживаем лимиты: {model_name: {api_index: is_limited}}
         self.model_limits = {}
     
-    def get_models(self):
-        """Получает список доступных моделей."""
-        models = []
-        try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    name = m.name.replace("models/", "")
-                    if "gemini" in name:
-                        models.append(name)
-        except:
-            pass
-        
-        fallback = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
-        for m in fallback:
-            if m not in models:
-                models.append(m)
-        
-        return models
-    
     async def find_working_model(self):
-        """Находит рабочую модель на текущем API ключе."""
-        models = self.get_models()
+        """
+        Ищет рабочую модель по приоритету ТОЧНОСТИ.
+        Сначала пробует самую точную модель на всех API,
+        потом вторую по точности, потом третью и т.д.
+        """
         
-        for model_name in models:
-            if self.model_limits.get(model_name, {}).get(self.api_key_index, False):
-                continue
+        # Пробуем каждую модель в порядке приоритета точности
+        for model_name in MODEL_PRIORITY:
+            print(f"\n🔍 Проверяю модель: {model_name}")
             
-            try:
-                test_model = genai.GenerativeModel(
-                    model_name=model_name,
-                    generation_config=generation_config,
-                    system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE
-                )
-                response = await test_model.generate_content_async("test")
+            # Пробуем текущий API ключ
+            if await self._try_model(model_name, self.api_key_index):
+                return True
+            
+            # Если текущий API в лимите, пробуем другие API ключи
+            for api_idx in range(len(GOOGLE_KEYS)):
+                if api_idx == self.api_key_index:
+                    continue  # Уже пробовали
                 
-                if response and response.text:
-                    self.current_model = test_model
-                    self.current_model_name = model_name
-                    print(f"✅ Модель: {model_name}")
-                    return True
-            except Exception as e:
-                if "429" in str(e):
-                    if model_name not in self.model_limits:
-                        self.model_limits[model_name] = {}
-                    self.model_limits[model_name][self.api_key_index] = True
+                # Переключаемся на другой API
+                self.api_key_index = api_idx
+                try:
+                    genai.configure(api_key=GOOGLE_KEYS[self.api_key_index])
+                    print(f"🔄 Переключился на API #{self.api_key_index + 1}")
+                    
+                    if await self._try_model(model_name, self.api_key_index):
+                        return True
+                except:
+                    pass
+        
+        print("❌ Не удалось найти рабочую модель на всех API и моделях")
+        return False
+    
+    async def _try_model(self, model_name: str, api_index: int) -> bool:
+        """Пробует одну модель на одном API ключе."""
+        
+        # Проверяем, не в ли лимите эта модель на этом API
+        if self.model_limits.get(model_name, {}).get(api_index, False):
+            print(f"⏭️ Модель {model_name} уже в лимите на API #{api_index + 1}")
+            return False
+        
+        try:
+            test_model = genai.GenerativeModel(
+                model_name=model_name,
+                generation_config=generation_config,
+                system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE
+            )
+            
+            # Быстрый тест
+            response = await test_model.generate_content_async("test")
+            
+            if response and response.text:
+                self.current_model = test_model
+                self.current_model_name = model_name
+                self.api_key_index = api_index
+                print(f"✅ Подключена модель: {model_name} на API #{api_index + 1}")
+                return True
+        
+        except Exception as e:
+            error_str = str(e)
+            
+            # Если это лимит - отмечаем и переходим дальше
+            if "429" in error_str or "quota" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                if model_name not in self.model_limits:
+                    self.model_limits[model_name] = {}
+                self.model_limits[model_name][api_index] = True
+                print(f"⚠️ Лимит на {model_name} (API #{api_index + 1})")
+            else:
+                print(f"❌ Ошибка {model_name}: {error_str[:50]}")
         
         return False
     
-    async def switch_api(self):
-        """Переключает на следующий API ключ."""
-        old_index = self.api_key_index
+    async def handle_limit_error(self):
+        """Обрабатывает ошибку лимита - ищет альтернативу."""
+        print(f"\n⚠️ Текущая модель {self.current_model_name} (API #{self.api_key_index + 1}) в лимите!")
         
-        for i in range(len(GOOGLE_KEYS)):
-            next_index = (self.api_key_index + 1) % len(GOOGLE_KEYS)
-            if next_index == old_index:
-                return False
-            
-            self.api_key_index = next_index
-            try:
-                genai.configure(api_key=GOOGLE_KEYS[self.api_key_index])
-                print(f"🔄 API #{self.api_key_index + 1}")
-                
-                if await self.find_working_model():
-                    return True
-            except:
-                pass
+        # Отмечаем текущую комбинацию как ограниченную
+        if self.current_model_name not in self.model_limits:
+            self.model_limits[self.current_model_name] = {}
+        self.model_limits[self.current_model_name][self.api_key_index] = True
+        
+        # Ищем альтернативу
+        if await self.find_working_model():
+            print(f"✅ Нашёл альтернативу: {self.current_model_name} (API #{self.api_key_index + 1})")
+            return True
         
         return False
 
@@ -488,7 +518,7 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
             mode_name = "🤰 Акушерство"
         
         print(f"\n📨 Запрос от {message.from_user.id} [{mode_name}]")
-        print(f"   Модель: {model_manager.current_model_name}")
+        print(f"   Модель: {model_manager.current_model_name} (API #{model_manager.api_key_index + 1})")
         
         conversation_history = user_state["conversation_history"]
         
@@ -534,10 +564,11 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
         print(f"❌ Ошибка: {error_str[:100]}")
         
         if "429" in error_str or "quota" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-            print(f"⚠️ Лимит")
+            print(f"⚠️ Лимит текущей модели!")
             
-            if await model_manager.switch_api():
-                await model_manager.find_working_model()
+            # Ищем альтернативу
+            if await model_manager.handle_limit_error():
+                print(f"✅ Пробую снова с {model_manager.current_model_name}")
                 return await process_message(message, bot_user, text_content, prompt_parts, user_state)
             
             await message.reply(
@@ -559,9 +590,8 @@ async def handle_trigger_action(message: Message, action: str, bot_user: types.U
     if action == "doctor":
         user_state["mode"] = "medicine_general"
         await message.answer(
-            "🏥 *Режим: Об��ая медицина* ✅\n\n"
-            "Анализирую: кардиология, инфекции, пульмология и др.\n"
-            "Гайдлайны: WHO, CDC, ESC, ADA, GOLD\n\n"
+            "🏥 *Общая медицина* ✅\n\n"
+            "Готов анализировать кардиологию, инфекции, пульмологию и др.\n\n"
             "📝 Задай вопрос 👇"
         )
         print(f"✅ {message.from_user.first_name} выбрал ОБЩУЮ МЕДИЦИНУ")
@@ -569,9 +599,8 @@ async def handle_trigger_action(message: Message, action: str, bot_user: types.U
     elif action == "gynecology":
         user_state["mode"] = "medicine_gynecology"
         await message.answer(
-            "👶 *Режим: Гинекология* ✅\n\n"
-            "Анализирую: репродуктивная медицина, менструальные расстройства, ВРТ\n"
-            "Гайдлайны: ACOG, RCOG, ESHRE\n\n"
+            "👶 *Гинекология* ✅\n\n"
+            "Готов анализировать репродуктивную медицину и ВРТ.\n\n"
             "📝 Задай вопрос 👇"
         )
         print(f"✅ {message.from_user.first_name} выбрал ГИНЕКОЛОГИЮ")
@@ -579,9 +608,8 @@ async def handle_trigger_action(message: Message, action: str, bot_user: types.U
     elif action == "obstetrics":
         user_state["mode"] = "medicine_obstetrics"
         await message.answer(
-            "🤰 *Режим: Акушерство* ✅\n\n"
-            "Анализирую: беременность, роды, послеродовой период\n"
-            "Гайдлайны: RCOG, ACOG, WHO, NICE, ISUOG\n\n"
+            "🤰 *Акушерство* ✅\n\n"
+            "Готов анализировать беременность, роды и послеродовой период.\n\n"
             "📝 Задай вопрос 👇"
         )
         print(f"✅ {message.from_user.first_name} выбрал АКУШЕРСТВО")
@@ -877,13 +905,21 @@ async def keep_alive_ping():
 
 async def start_bot():
     """Запуск бота в polling режиме."""
-    print(f"✅ API #{model_manager.api_key_index + 1} готов к использованию")
+    print(f"\n{'='*60}")
+    print(f"🚀 ЗАПУСК МЕДИЦИНСКОГО АССИСТЕНТА V5.0")
+    print(f"{'='*60}")
+    print(f"\n📋 ПРИОРИТЕТ МОДЕЛЕЙ (по ТОЧНОСТИ):")
+    for i, model in enumerate(MODEL_PRIORITY, 1):
+        print(f"  {i}️⃣ {model}")
+    print(f"\n🔑 Доступно API ключей: {len(GOOGLE_KEYS)}")
     
-    print(f"🔍 Инициализирую модель...")
+    print(f"\n🔍 Инициализирую модель...")
     if not await model_manager.find_working_model():
         print(f"⚠️ Не удалось загрузить модель, но продолжаю работу...")
     
-    print(f"🤖 Запуск бота в polling режиме...")
+    print(f"✅ Модель: {model_manager.current_model_name} (API #{model_manager.api_key_index + 1})")
+    print(f"🤖 Запуск бота в polling режиме...\n")
+    
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
@@ -895,16 +931,11 @@ async def start_server():
 
 async def main():
     """Главная точка входа."""
-    print("=" * 50)
-    print("🚀 ЗАПУСК МЕДИЦИНСКОГО АССИСТЕНТА V5.0")
-    print("=" * 50)
-    
     if not GOOGLE_KEYS:
         print("❌ ОШИБКА: Google API ключи не установлены!")
         sys.exit(1)
     
-    print(f"✅ Найдено {len(GOOGLE_KEYS)} API ключей")
-    
+    # Инициализируем первый API ключ
     try:
         genai.configure(api_key=GOOGLE_KEYS[model_manager.api_key_index])
         print(f"✅ API #{model_manager.api_key_index + 1} сконфигурирован")
