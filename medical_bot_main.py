@@ -309,21 +309,38 @@ async def create_model(model_name: str):
 
 async def init_model():
     """Инициализирует модель при запуске бота."""
-    model_to_try = model_manager.get_next_available_model()
+    # Пробуем все API ключи и модели
+    for api_index in range(len(GOOGLE_KEYS)):
+        model_manager.current_api_key_index = api_index
+        
+        # Инициализируем API
+        try:
+            genai.configure(api_key=GOOGLE_KEYS[api_index])
+            print(f"✅ API #{api_index + 1} сконфигурирован")
+        except Exception as e:
+            print(f"❌ Ошибка конфигурации API #{api_index + 1}: {e}")
+            continue
+        
+        # Пробуем модели по приоритету
+        for model_name in model_manager.MODEL_PRIORITY:
+            print(f"🤖 Пробую модель: {model_name}")
+            
+            try:
+                model_manager.current_model = genai.GenerativeModel(
+                    model_name=model_name,
+                    generation_config=generation_config,
+                    system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE
+                )
+                model_manager.current_model_name = model_name
+                print(f"✅ Модель {model_name} готова")
+                return True  # УСПЕХ!
+                
+            except Exception as e:
+                print(f"❌ Ошибка создания модели: {e}")
+                continue  # Пробуем следующую модель
     
-    if not model_to_try:
-        model_to_try = model_manager.MODEL_PRIORITY[0]
-    
-    print(f"🤖 Пробую модель: {model_to_try}")
-    
-    if await create_model(model_to_try):
-        return True
-    
-    # Если не удалось - пробуем переключиться на другой API
-    if model_manager.switch_api_key():
-        await init_gemini_api()
-        return await init_model()
-    
+    # Если ничего не сработало
+    print("❌ Не удалось инициализировать ни одну модель")
     return False
 
 async def is_addressed_to_bot(message: Message, bot_user: types.User) -> bool:
