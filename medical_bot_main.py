@@ -52,9 +52,7 @@ MSK_TZ = ZoneInfo("Europe/Moscow")
 
 SYSTEM_PROMPT_GENERAL_MEDICINE = """Ты — исследователь-аналитик и академический ассистент для общей медицины.
 
-🚨 ОБЯЗАТЕЛЬНЫЙ ДИСКЛЕЙМЕР:
-Этот анализ — ОБРАЗОВАТЕЛЬНЫЙ МАТЕРИАЛ для студентов и медработников.
-НЕ является клиническим руководством для лечения пациентов.
+⚠️ ДИСКЛЕЙМЕР:
 Все клинические решения требуют консультации с лицензированным врачом.
 
 ПРИНЦИП РАБОТЫ:
@@ -64,37 +62,40 @@ SYSTEM_PROMPT_GENERAL_MEDICINE = """Ты — исследователь-анал
 ├─ Отказ от выдуманных данных и источников
 └─ Честное указание пробелов в знаниях
 
-📚 ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ (ТОЛЬКО ЭТИ):
+📚 ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ:
 PubMed/PMC, Cochrane Library, Web of Science, Scopus (peer-review)
-Гайдлайны: WHO, CDC, ESC (кардиология), ADA (эндокринология), 
-GOLD (пульмология), EASL (гастроэнтерология), Минздрав РФ, NICE
+Гайдлайны: WHO, CDC, ESC, ADA, GOLD, EASL, Минздрав РФ, NICE
 
 🎯 СТРУКТУРА ОТВЕТА:
-Создавай таблицы с полями:
-| Исследование/Гайдлайн | Год | Авторы | Метод | Результат | Эффективность | GRADE | PMID/DOI |
+Используй простой текстовый формат. Пример:
 
-🛡️ АНТИ-ГАЛЛЮЦИНАЦИОННЫЙ КОНТРОЛЬ:
+📌 **Исследование:** (название)
+   Год: 2023 | Авторы: (имена)
+   Метод: (описание)
+   Результат: (описание)
+   Эффективность: (данные с 95% CI)
+   GRADE: High/Moderate/Low
+   PMID: 12345678
+
+🛡️ КОНТРОЛЬ КАЧЕСТВА:
 - Если данных нет → "Данные отсутствуют в открытых источниках"
-- НЕ выдумывай PMID, авторов, цифры эффективности
-- ВСЕГДА указывай источник (PMID/DOI) для каждого утверждения
-- При расхождениях между гайдлайнами → объясни почему
-- Помечай данные старше 5 лет как "историческая справка"
+- НЕ выдумывай PMID, авторов, цифры
+- ВСЕГДА указывай источник (PMID/DOI)
+- При расхождениях → объясни почему
+- Данные старше 5 лет → отметь как "историческая справка"
 
 ⚠️ ЛОКАЛЬНАЯ РЕЛЕВАНТНОСТЬ:
-Указывай, где подход РФ расходится с международными стандартами
-Причины: доступность препаратов, регистрация, эпидемиология
+Указывай, где подход РФ отличается от международных стандартов
 
 📝 СТИЛЬ:
 - Ясно, академично, без просторечий
 - Факты впереди мнений
-- Цифры: OR, RR, 95% CI, чувствительность/специфичность
-- Таблицы вместо длинного текста"""
+- Цифры: OR, RR, 95% CI
+- МАКСИМУМ 3000 символов!"""
 
-SYSTEM_PROMPT_GYNECOLOGY = """Ты — клинический ассистент-аналитик, помогающий студенту систематизировать данные по гинекологии и акушерству.
+SYSTEM_PROMPT_GYNECOLOGY = """Ты — клинический ассистент-аналитик по гинекологии и акушерству.
 
-🚨 ОБЯЗАТЕЛЬНЫЙ ДИСКЛЕЙМЕР:
-Этот анализ — ОБРАЗОВАТЕЛЬНЫЙ МАТЕРИАЛ для студентов и медработников.
-НЕ является клиническим руководством для лечения пациентов.
+⚠️ ДИСКЛЕЙМЕР:
 Все клинические решения требуют консультации с лицензированным врачом.
 
 ПРИНЦИП РАБОТЫ:
@@ -105,35 +106,43 @@ SYSTEM_PROMPT_GYNECOLOGY = """Ты — клинический ассистент
 └─ Отказ от выдуманных источников и данных
 
 📚 ПРИОРИТЕТНЫЕ ГАЙДЛАЙНЫ:
-1. RCOG (Royal College) - консервативный, доказательный подход
-2. ACOG (American College) - практико-ориентированный
-3. ESHRE (European Society) - вспомогательные репродуктивные технологии
-4. DGG/DGGG (Германия) - тщательные систематические обзоры
-5. Минздрав РФ - федеральные клинические рекомендации
-+ PubMed, Cochrane, Web of Science (только peer-review)
+1. RCOG (Royal College)
+2. ACOG (American College)
+3. ESHRE (European Society)
+4. DGG/DGGG (Германия)
+5. Минздрав РФ
 
 🎯 СТРУКТУРА ОТВЕТА:
-Таблица с полями:
-| Guideline/Исследование | Год | Авторы | Учреждение | Метод | Результат | Эффективность | GRADE | PMID/DOI |
+Используй простой текстовый формат. Пример:
 
-🛡️ АНТИ-ГАЛЛЮЦИНАЦИОННЫЙ КОНТРОЛЬ:
+📌 **Guideline:** (название)
+   Организация: RCOG/ACOG/ESHRE
+   Год: 2023
+   Авторы: (список)
+   Метод: (описание)
+   Результат: (описание)
+   Эффективность: (данные)
+   GRADE: High/Moderate/Low
+   PMID/DOI: (ссылка)
+
+🛡️ КОНТРОЛЬ КАЧЕСТВА:
 - Если данных нет → явно отмечай "Данные отсутствуют"
 - НЕ создавай вымышленные PMID или авторов
 - ВСЕГДА ссылка на источник для каждого факта
 - При расхождении RCOG vs ACOG → объясни разницу методологий
-- Помечай рекомендации старше 5-7 лет как требующие проверки
+- Рекомендации старше 5-7 лет → отметь как требующие проверки
 
 ⚠️ СПЕЦИФИКА ГИНЕКОЛОГИИ:
-- RCOG часто консервативнее чем ACOG (принцип предосторожности)
-- ESHRE специализируется на ВРТ (экстракорпоральное оплодотворение)
-- Минздрав РФ может рекомендовать другие препараты (доступность/регистрация)
+- RCOG часто консервативнее ACOG
+- ESHRE специализируется на ВРТ
+- Минздрав РФ может рекомендовать другие препараты
 - ВСЕГДА отмечай: "В [стране] подход иной из-за [причина]"
 
 📝 СТИЛЬ:
 - Ясно, логично, академично
-- Не копируй абстракты - переформулируй научно
+- Не копируй абстракты - переформулируй
 - Цифры с доверительными интервалами (95% CI)
-- Таблицы для наглядности"""
+- МАКСИМУМ 3000 символов!"""
 
 # ═══════════════════════════════════════════════════════════════
 # 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ
@@ -160,7 +169,6 @@ class ModelManager:
         except:
             pass
         
-        # Fallback модели
         fallback = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
         for m in fallback:
             if m not in models:
@@ -245,29 +253,64 @@ def get_user_state(user_id: int) -> Dict:
     return USER_STATES[user_id]
 
 # ═══════════════════════════════════════════════════════════════
-# 🎯 РУССКИЕ ТРИГГЕРЫ
+# 🎯 РАСШИРЕННЫЕ ТРИГГЕРЫ (ТОЧНОЕ СОВПАДЕНИЕ)
 # ═══════════════════════════════════════════════════════════════
 
-TRIGGER_DOCTOR = "!врач"
-TRIGGER_GYNECOLOGY = "!гениколог"
-TRIGGER_REFRESH = "!обнови"
+TRIGGER_WORDS_MAPPING = {
+    # Гинекология
+    "!ген": "gynecology",
+    "!гениколог": "gynecology",
+    "!гинеколог": "gynecology",
+    "!гин": "gynecology",
+    
+    # Общая медицина
+    "!док": "doctor",
+    "!доктор": "doctor",
+    "!врач": "doctor",
+    "!медицина": "doctor",
+    "!med": "doctor",
+    
+    # Информация
+    "!инфо": "info",
+    "!информация": "info",
+    "!помощь": "info",
+    "!help": "info",
+    "!справка": "info",
+    
+    # Старт
+    "!старт": "start",
+    "!start": "start",
+    "!начать": "start",
+    
+    # Очистка памяти
+    "!очистить": "refresh",
+    "!обнови": "refresh",
+    "!очисти": "refresh",
+    "!забудь": "refresh",
+    "!refresh": "refresh",
+}
 
 def check_for_triggers(text: str) -> Optional[str]:
-    """Проверяет наличие русских триггеров."""
+    """
+    Проверяет ТОЧНОЕ совпадение триггеров.
+    Триггер должен быть отдельным словом, не частью другого слова.
+    """
     if not text:
         return None
     
     text_lower = text.strip().lower()
+    
+    # Разбиваем текст на слова (по пробелам)
     words = text_lower.split()
     
+    # Проверяем каждое слово на точное совпадение с триггером
     for word in words:
-        if word == TRIGGER_DOCTOR:
-            return "doctor"
-        elif word == TRIGGER_GYNECOLOGY:
-            return "gynecology"
-        elif word == TRIGGER_REFRESH:
-            return "refresh"
+        if word in TRIGGER_WORDS_MAPPING:
+            action = TRIGGER_WORDS_MAPPING[word]
+            print(f"🔴 ТОЧНЫЙ ТРИГГЕР ОБНАРУЖЕН: '{word}' → Действие: {action}")
+            return action
     
+    # Если триггер не найден - возвращаем None
     return None
 
 # ═══════════════════════════════════════════════════════════════
@@ -279,7 +322,7 @@ def get_mode_buttons() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🏥 Общая медицина", callback_data="mode_general"),
-            InlineKeyboardButton(text="🏥 Гинекология", callback_data="mode_gyn"),
+            InlineKeyboardButton(text="👶 Гинекология", callback_data="mode_gyn"),
         ]
     ])
     return keyboard
@@ -327,6 +370,39 @@ async def prepare_prompt_parts(message: Message, bot_user: types.User) -> Tuple[
     
     return prompt_parts, temp_files_to_delete
 
+async def send_long_message(message: Message, text: str, max_length: int = 4096):
+    """Отправляет длинное сообщение, разбивая его на части."""
+    if len(text) <= max_length:
+        await message.reply(text, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # Разбиваем по абзацам
+    parts = []
+    current_part = ""
+    
+    paragraphs = text.split("\n")
+    for paragraph in paragraphs:
+        if len(current_part) + len(paragraph) + 1 <= max_length:
+            current_part += paragraph + "\n"
+        else:
+            if current_part:
+                parts.append(current_part.strip())
+            current_part = paragraph + "\n"
+    
+    if current_part:
+        parts.append(current_part.strip())
+    
+    # Отправляем части
+    for i, part in enumerate(parts):
+        if part:
+            if i < len(parts) - 1:
+                await message.reply(part + "\n\n_[часть " + str(i+1) + "/" + str(len(parts)) + "]_", parse_mode=ParseMode.MARKDOWN)
+            else:
+                await message.reply(part, parse_mode=ParseMode.MARKDOWN)
+            
+            # Небольшая задержка между сообщениями
+            await asyncio.sleep(0.5)
+
 async def process_message(message: Message, bot_user: types.User, text_content: str, 
                           prompt_parts: List, user_state: Dict):
     """Обработка сообщения."""
@@ -336,7 +412,7 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
             mode_name = "🏥 Общая медицина"
         else:
             system_prompt = SYSTEM_PROMPT_GYNECOLOGY
-            mode_name = "🏥 Гинекология"
+            mode_name = "👶 Гинекология"
         
         print(f"\n📨 Запрос от {message.from_user.id} [{mode_name}]")
         print(f"   Модель: {model_manager.current_model_name}")
@@ -372,10 +448,9 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
                 user_state["conversation_history"] = user_state["conversation_history"][-20:]
             
             answer_text = response.text
-            if len(answer_text) > 4000:
-                answer_text = answer_text[:3900] + "\n\n⚠️ Ответ обрезан из-за длины."
             
-            await message.reply(answer_text, parse_mode=ParseMode.MARKDOWN)
+            # Отправляем длинное сообщение
+            await send_long_message(message, answer_text)
             print(f"✅ Ответ отправлен")
             return True
         
@@ -405,6 +480,51 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
             await message.reply(f"❌ Ошибка: {error_str[:100]}")
             return False
 
+async def handle_trigger_action(message: Message, action: str, bot_user: types.User):
+    """Обрабатывает триггер-действие."""
+    user_id = message.from_user.id
+    user_state = get_user_state(user_id)
+    
+    if action == "doctor":
+        user_state["mode"] = "medicine_general"
+        await message.answer(
+            "🏥 **РЕЖИМ: Общая медицина** ✅\n\n"
+            "Готов анализировать гайдлайны по кардиологии, инфекциям, пульмологии и др.\n"
+            "Используй рекомендации: WHO, CDC, ESC, ADA, GOLD и другие\n\n"
+            "_Триггеры: !док, !доктор, !врач, !медицина_\n\n"
+            "📝 Задай свой вопрос! 👇"
+        )
+        print(f"✅ {message.from_user.first_name} переключился на режим ОБЩЕЙ МЕДИЦИНЫ")
+    
+    elif action == "gynecology":
+        user_state["mode"] = "medicine_gynecology"
+        await message.answer(
+            "👶 **РЕЖИМ: Гинекология и акушерство** ✅\n\n"
+            "Готов анализировать рекомендации ACOG, RCOG, ESHRE и Минздрава РФ\n"
+            "Репродуктивная медицина, менструальные расстройства, ВРТ, беременность\n\n"
+            "_Триггеры: !ген, !гениколог, !гинеколог, !гин_\n\n"
+            "📝 Задай свой вопрос! 👇"
+        )
+        print(f"✅ {message.from_user.first_name} переключился на режим ГИНЕКОЛОГИИ")
+    
+    elif action == "info":
+        print(f"ℹ️ {message.from_user.first_name} запросил информацию")
+        await command_info_handler(message)
+    
+    elif action == "start":
+        print(f"🔄 {message.from_user.first_name} запросил /start")
+        await command_start_handler(message)
+    
+    elif action == "refresh":
+        user_state["conversation_history"] = []
+        await message.answer(
+            "🗑️ **История диалога очищена!** ✅\n\n"
+            "Бот больше не помнит предыдущих сообщений.\n"
+            "Начинаем диалог с чистого листа! 📄\n\n"
+            "_Триггеры: !очистить, !обнови, !очисти, !забудь_"
+        )
+        print(f"✅ {message.from_user.first_name} очистил историю диалога")
+
 # ═══════════════════════════════════════════════════════════════
 # 📝 CALLBACK ХЕНДЛЕРЫ
 # ═══════════════════════════════════════════════════════════════
@@ -428,13 +548,13 @@ async def handle_mode_callback(query: CallbackQuery):
             "• Указываю авторов, годы и уровень доказательности\n"
             "• Объясняю расхождения между странами (РФ vs Запад)\n"
             "• Честно говорю, где данных нет\n\n"
-            "⚠️ Образовательный материал. Не заменяет врача."
+            "⚠️ Все клинические решения требуют консультации с лицензированным врачом."
         )
         
     elif callback_data == "mode_gyn":
         user_state["mode"] = "medicine_gynecology"
         message_text = (
-            "🏥 **Режим: Гинекология и акушерство**\n\n"
+            "👶 **Режим: Гинекология и акушерство**\n\n"
             "**Специализация:** Репродуктивная медицина, менструальные расстройства, ВРТ, беременность и т.д.\n\n"
             "**Принцип работы:**\n"
             "• Ищу рекомендации ACOG, RCOG, ESHRE, Минздрава РФ\n"
@@ -442,7 +562,7 @@ async def handle_mode_callback(query: CallbackQuery):
             "• Указываю авторов и их вклад в науку\n"
             "• Объясняю различия в подходах между странами\n"
             "• Отмечаю пробелы в знаниях\n\n"
-            "⚠️ Образовательный материал. Не заменяет врача."
+            "⚠️ Все клинические решения требуют консультации с лицензированным врачом."
         )
     else:
         return
@@ -459,6 +579,100 @@ async def handle_mode_callback(query: CallbackQuery):
         await query.answer("❌ Ошибка", show_alert=True)
 
 # ═══════════════════════════════════════════════════════════════
+# 🎮 ИНФОРМАЦИЯ
+# ═══════════════════════════════════════════════════════════════
+
+INFO_TEXT = """🏥 **МЕДИЦИНСКИЙ АССИСТЕНТ V4.0 - ИНСТРУКЦИЯ**
+
+**ЧТО УМЕЕТ БОТ:**
+Анализирует медицинские гайдлайны и исследования для:
+• 🏥 Общей медицины (кардиология, инфекции, пульмология и др.)
+• 👶 Гинекологии и акушерства
+• 📸 Анализирует картинки через Google AI
+
+**ВАЖНО:** Все клинические решения требуют консультации с лицензированным врачом!
+
+═══════════════════════════════════════════════════════════════
+
+**КОМАНДЫ:**
+
+/start - Главное меню и список команд
+/info - Эта инструкция
+/medic - Режим "Общая медицина"
+/gen - Режим "Гинекология"
+/refresh - Очистить историю диалога
+
+═══════════════════════════════════════════════════════════════
+
+**ТРИГГЕР-СЛОВА (вызывают режимы автоматически):**
+
+*Гинекология:*
+!ген, !гениколог, !гинеколог, !гин
+
+*Общая медицина:*
+!док, !доктор, !врач, !медицина, !med
+
+*Информация/Помощь:*
+!инфо, !информация, !помощь, !help, !справка
+
+*Главное меню:*
+!старт, !start, !начать
+
+*Очистить память:*
+!очистить, !обнови, !очисти, !забудь, !refresh
+
+═══════════════════════════════════════════════════════════════
+
+**КАК ИСПОЛЬЗОВАТЬ:**
+
+1️⃣ Выбери режим:
+   • /medic или !док для общей медицины
+   • /gen или !ген для гинекологии
+
+2️⃣ Напиши свой вопрос:
+   "Какая эффективность метформина при СПКЯ?"
+   "Какие гайдлайны по лечению пневмонии?"
+
+3️⃣ Или отправь картинку:
+   Бот проанализирует её через Google AI
+
+4️⃣ Бот ответит с:
+   • Официальными гайдлайнами (RCOG, ACOG, WHO и т.д.)
+   • Уровнем доказательности (GRADE)
+   • PMID исследований
+   • Различиями между странами
+
+5️⃣ Бот запомнит контекст диалога:
+   Можешь задать уточняющие вопросы, он будет помнить предыдущие
+
+6️⃣ Очистить память:
+   /refresh или !обнови
+
+═══════════════════════════════════════════════════════════════
+
+**ПРИМЕРЫ ВОПРОСОВ:**
+
+🏥 Общая медицина:
+"Актуальные гайдлайны по лечению гипертензии у беременных"
+"Эффективность антибиотиков при бактериальной пневмонии"
+"GRADE оценка методов диагностики сахарного диабета"
+
+👶 Гинекология:
+"Рекомендации ACOG и RCOG по ведению СПКЯ"
+"Эффективность ВРТ при трубном факторе бесплодия"
+"Протоколы лечения эндометриоза согласно ESHRE"
+
+═══════════════════════════════════════════════════════════════
+
+**ДИСКЛЕЙМЕР:**
+⚠️ Все клинические решения требуют консультации с лицензированным врачом
+⚠️ Информация может быть неполной - всегда проверяй источники
+
+═══════════════════════════════════════════════════════════════
+
+Вопросы? Команда /start в любой момент!"""
+
+# ═══════════════════════════════════════════════════════════════
 # 🎮 КОМАНДЫ
 # ═══════════════════════════════════════════════════════════════
 
@@ -472,21 +686,25 @@ async def command_start_handler(message: Message):
     status = f"✅ `{model_manager.current_model_name}`{api_info}" if model_manager.current_model_name != "Searching..." else "💀 Модель загружается..."
     
     commands_info = (
-        "\n\n📋 **Текущий режим:** 🏥 Общая медицина\n\n"
-        "**Команды:**\n"
-        "  /medic (триггер !врач) - Общая медицина\n"
-        "  /gen (триггер !гениколог) - Гинекология\n"
-        "  /refresh (триггер !обнови) - Очистить память диалога\n\n"
-        "**Как использовать:**\n"
-        "1. Выберите режим (команда или триггер)\n"
-        "2. Напишите вопрос\n"
-        "3. Бот запомнит контекст для следующих вопросов"
+        "\n\n📋 **БЫСТРЫЕ КОМАНДЫ:**\n"
+        "/medic - Общая медицина\n"
+        "/gen - Гинекология\n"
+        "/info - Полная инструкция\n"
+        "/refresh - Очистить историю\n\n"
+        "Или используй триггеры:\n"
+        "!врач, !ген, !инфо, !обнови\n\n"
+        "👉 /info - для полной инструкции"
     )
     
     await message.answer(
         f"🏥 **Медицинский Ассистент V4.0**\n{status}{commands_info}",
         reply_markup=get_mode_buttons()
     )
+
+@dp.message(Command("info"))
+async def command_info_handler(message: Message):
+    """Полная инструкция."""
+    await message.answer(INFO_TEXT, reply_markup=get_mode_buttons())
 
 @dp.message(Command("medic"))
 async def command_medic_handler(message: Message):
@@ -498,8 +716,8 @@ async def command_medic_handler(message: Message):
     await message.answer(
         "🏥 **Режим: Общая медицина** ✅\n\n"
         "Готов анализировать гайдлайны по кардиологии, инфекциям, пульмологии и др.\n\n"
-        "_Триггер: !врач_",
-        reply_markup=get_mode_buttons()
+        "_Триггеры: !док, !доктор, !врач, !медицина_\n\n"
+        "📝 Задай свой вопрос! 👇"
     )
 
 @dp.message(Command("gen"))
@@ -510,10 +728,10 @@ async def command_gen_handler(message: Message):
     user_state["mode"] = "medicine_gynecology"
     
     await message.answer(
-        "🏥 **Режим: Гинекология** ✅\n\n"
+        "👶 **Режим: Гинекология** ✅\n\n"
         "Готов анализировать клинические рекомендации ACOG, RCOG, ESHRE и Минздрава РФ.\n\n"
-        "_Триггер: !гениколог_",
-        reply_markup=get_mode_buttons()
+        "_Триггеры: !ген, !гениколог, !гинеколог, !гин_\n\n"
+        "📝 Задай свой вопрос! 👇"
     )
 
 @dp.message(Command("refresh"))
@@ -526,7 +744,7 @@ async def command_refresh_handler(message: Message):
     await message.answer(
         "🗑️ **История диалога очищена**\n\n"
         "Бот больше не помнит предыдущих сообщений. Начинаем с чистого листа!\n\n"
-        "_Триггер: !обнови_"
+        "_Триггеры: !очистить, !обнови, !очисти, !забудь_"
     )
 
 # ═══════════════════════════════════════════════════════════════
@@ -542,18 +760,13 @@ async def main_handler(message: Message):
     text_to_check = message.text or message.caption or ""
     trigger_result = check_for_triggers(text_to_check)
     
-    if trigger_result == "doctor":
-        user_state["mode"] = "medicine_general"
-        await command_medic_handler(message)
-        return
-    elif trigger_result == "gynecology":
-        user_state["mode"] = "medicine_gynecology"
-        await command_gen_handler(message)
-        return
-    elif trigger_result == "refresh":
-        await command_refresh_handler(message)
+    # ✅ ЕСЛИ НАЙДЕН ТРИГГЕР - ВЫПОЛНЯЕМ ДЕЙСТВИЕ
+    if trigger_result:
+        bot_user = await bot.get_me()
+        await handle_trigger_action(message, trigger_result, bot_user)
         return
     
+    # Если нет триггера - проверяем адресацию к боту
     if not model_manager.current_model:
         status_msg = await message.answer("⏳ Загрузка модели...")
         if not await model_manager.find_working_model():
@@ -658,7 +871,6 @@ async def main():
     
     print(f"✅ Найдено {len(GOOGLE_KEYS)} API ключей")
     
-    # Инициализируем первый API ключ
     try:
         genai.configure(api_key=GOOGLE_KEYS[model_manager.api_key_index])
         print(f"✅ API #{model_manager.api_key_index + 1} сконфигурирован")
