@@ -4,7 +4,9 @@ import logging
 import sys
 from io import BytesIO
 from typing import Optional, List, Dict, Tuple
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+import json
 
 import uvicorn
 from fastapi import FastAPI
@@ -36,6 +38,9 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 GOOGLE_KEYS = [k for k in GOOGLE_KEYS if k]
 
+# Временная зона
+MSK_TZ = ZoneInfo("Europe/Moscow")
+
 # ═══════════════════════════════════════════════════════════════
 # 📚 СИСТЕМНЫЕ ПРОМТЫ
 # ═══════════════════════════════════════════════════════════════
@@ -54,7 +59,7 @@ SYSTEM_PROMPT_GENERAL_MEDICINE = """Ты — исследователь-анал
 ├─ Отказ от выдуманных данных и источников
 └─ Честное указание пробелов в знаниях
 
-📚 ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ (ТОЛЬКО ЭЕТИ):
+📚 ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ (ТОЛЬКО ЭТИ):
 PubMed/PMC, Cochrane Library, Web of Science, Scopus (peer-review)
 Гайдлайны: WHO, CDC, ESC (кардиология), ADA (эндокринология), 
 GOLD (пульмология), EASL (гастроэнтерология), Минздрав РФ, NICE
@@ -137,6 +142,80 @@ generation_config = {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ С ЛИМИТАМИ
+# ═══════════════════════════════════════════════════════════════
+
+class ModelManager:
+    """Управляет доступными моделями и их лимитами."""
+    
+    # Приоритет использования моделей
+    MODEL_PRIORITY = [
+        "gemini-2.5-flash",      # Первый выбор
+        "gemini-2.5-flash-lite", # Альтернатива при лимитах
+    ]
+    
+    def __init__(self):
+        self.api_key_limits = {}  # {api_index: {model: is_limited}}
+        self.current_api_key_index = 0
+        self.current_model = None
+        self.current_model_name = None
+        self.last_limit_reset = datetime.now(MSK_TZ)
+    
+    def get_next_available_model(self) -> Optional[str]:
+        """Возвращает первую доступную модель с учётом лимитов."""
+        current_api = self.current_api_key_index
+        
+        # Проверяем модели в порядке приоритета
+        for model in self.MODEL_PRIORITY:
+            if not self.is_model_limited(model, current_api):
+                return model
+        
+        return None  # Все модели в лимите
+    
+    def is_model_limited(self, model: str, api_index: int) -> bool:
+        """Проверяет, ограничена ли модель на данном API ключе."""
+        if api_index not in self.api_key_limits:
+            self.api_key_limits[api_index] = {}
+        
+        return self.api_key_limits[api_index].get(model, False)
+    
+    def mark_model_limited(self, model: str, api_index: int):
+        """Помечает модель как ограниченную."""
+        if api_index not in self.api_key_limits:
+            self.api_key_limits[api_index] = {}
+        
+        self.api_key_limits[api_index][model] = True
+        print(f"⚠️ Модель {model} на API #{api_index + 1} в лимите")
+    
+    def switch_api_key(self) -> bool:
+        """Переключается на следующий API ключ."""
+        old_index = self.current_api_key_index
+        
+        for i in range(len(GOOGLE_KEYS)):
+            next_index = (self.current_api_key_index + 1) % len(GOOGLE_KEYS)
+            if next_index == old_index:
+                return False  # Полный круг - все API в лимите
+            
+            self.current_api_key_index = next_index
+            print(f"🔄 Переключаюсь на API #{next_index + 1}")
+            return True
+        
+        return False
+    
+    def reset_limits_if_needed(self):
+        """Сбрасывает лимиты, если прошли 24 часа."""
+        now = datetime.now(MSK_TZ)
+        time_since_reset = now - self.last_limit_reset
+        
+        # Сбрасываем каждые 24 часа
+        if time_since_reset.total_seconds() > 86400:
+            self.api_key_limits = {}
+            self.last_limit_reset = now
+            print(f"🔄 Лимиты сброшены! (24 часа прошли)")
+
+model_manager = ModelManager()
+
+# ═══════════════════════════════════════════════════════════════
 # 📋 ИНИЦИАЛИЗАЦИЯ
 # ═══════════════════════════════════════════════════════════════
 
@@ -146,23 +225,48 @@ app = FastAPI()
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-ACTIVE_MODEL = None
-ACTIVE_MODEL_NAME = "Searching..."
-CURRENT_API_KEY_INDEX = 0
-MODEL_LIMITS = {}
-CURRENT_MODE = "medicine_general"  # По умолчанию - общая медицина
+# ПОЛЬЗОВАТЕЛЬСКИЕ СОСТОЯНИЯ (user_id -> данные)
+USER_STATES = {}
 
-# ПАМЯТЬ ДИАЛОГОВ (user_id -> список сообщений)
-USER_CONVERSATIONS = {}
+def get_user_state(user_id: int) -> Dict:
+    """Получает или создаёт состояние пользователя."""
+    if user_id not in USER_STATES:
+        USER_STATES[user_id] = {
+            "mode": "medicine_general",  # medicine_general или medicine_gynecology
+            "conversation_history": [],  # История диалога
+            "last_activity": datetime.now(MSK_TZ)
+        }
+    
+    USER_STATES[user_id]["last_activity"] = datetime.now(MSK_TZ)
+    return USER_STATES[user_id]
 
 # ═══════════════════════════════════════════════════════════════
 # 🎯 РУССКИЕ ТРИГГЕРЫ (ТОЧНОЕ СОВПАДЕНИЕ)
 # ═══════════════════════════════════════════════════════════════
 
-TRIGGER_DOCTOR = "!врач"      # Включить режим общей медицины
-TRIGGER_GYNECOLOGY = "!гениколог"  # Включить режим гинекологии
-TRIGGER_REFRESH = "!обнови"   # Очистить память диалога
+TRIGGER_DOCTOR = "!врач"         # Режим общей медицины
+TRIGGER_GYNECOLOGY = "!гениколог" # Режим гинекологии
+TRIGGER_REFRESH = "!обнови"      # Очистить память диалога
+
+def check_for_triggers(text: str) -> Optional[str]:
+    """
+    Проверяет наличие русских триггеров (ТОЧНОЕ совпадение).
+    """
+    if not text:
+        return None
+    
+    text_lower = text.strip().lower()
+    words = text_lower.split()
+    
+    for word in words:
+        if word == TRIGGER_DOCTOR:
+            return "doctor"
+        elif word == TRIGGER_GYNECOLOGY:
+            return "gynecology"
+        elif word == TRIGGER_REFRESH:
+            return "refresh"
+    
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 # 🔧 ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -178,101 +282,51 @@ def get_mode_buttons() -> InlineKeyboardMarkup:
     ])
     return keyboard
 
-def get_dynamic_model_list():
-    """Получает список доступных моделей Gemini."""
-    available_models = []
+async def init_gemini_api():
+    """Инициализирует Google Generative AI API."""
     try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                name = m.name.replace("models/", "")
-                if "gemini" in name:
-                    available_models.append(name)
+        genai.configure(api_key=GOOGLE_KEYS[model_manager.current_api_key_index])
+        print(f"✅ API #{model_manager.current_api_key_index + 1} сконфигурирован")
+        return True
     except Exception as e:
-        print(f"⚠️ Ошибка получения списка моделей: {e}")
-    
-    hardcoded = ["gemini-exp-1206", "gemini-1.5-flash", "gemini-1.5-flash-8b", 
-                 "gemini-2.0-flash-exp", "gemini-3-flash-preview"]
-    for h in hardcoded:
-        if h not in available_models:
-            available_models.append(h)
-    
-    return list(set(available_models))
+        print(f"❌ Ошибка конфигурации API: {e}")
+        return False
 
-def sort_models_priority(models):
-    """Сортирует модели по приоритету."""
-    def score(name):
-        s = 0
-        if "exp" in name: s += 500
-        if "3-" in name or "2.5-" in name: s += 400
-        if "flash" in name: s += 300
-        if "1.5" in name: s += 50
-        if "8b" in name: s += 250
-        if "lite" in name: s += 100
-        if "pro" in name: s -= 50
-        if "preview" in name: s -= 20
-        return s
-    
-    return sorted(models, key=score, reverse=True)
+async def create_model(model_name: str):
+    """Создаёт экземпляр модели Gemini."""
+    try:
+        model_manager.current_model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=generation_config,
+            system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE  # По умолчанию
+        )
+        model_manager.current_model_name = model_name
+        print(f"✅ Модель {model_name} готова")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка создания модели: {e}")
+        return False
 
-async def switch_api_key(silent: bool = True) -> bool:
-    """Переключается на следующий API ключ."""
-    global CURRENT_API_KEY_INDEX, ACTIVE_MODEL, ACTIVE_MODEL_NAME
+async def init_model():
+    """Инициализирует модель при запуске бота."""
+    model_to_try = model_manager.get_next_available_model()
     
-    old_index = CURRENT_API_KEY_INDEX
+    if not model_to_try:
+        model_to_try = model_manager.MODEL_PRIORITY[0]
     
-    for i in range(len(GOOGLE_KEYS)):
-        next_index = (CURRENT_API_KEY_INDEX + 1) % len(GOOGLE_KEYS)
-        if next_index == old_index:
-            return False
-        
-        CURRENT_API_KEY_INDEX = next_index
-        try:
-            genai.configure(api_key=GOOGLE_KEYS[CURRENT_API_KEY_INDEX])
-            if await find_best_working_model(silent=silent):
-                return True
-        except Exception as e:
-            pass
+    print(f"🤖 Пробую модель: {model_to_try}")
+    
+    if await create_model(model_to_try):
+        return True
+    
+    # Если не удалось - пробуем переключиться на другой API
+    if model_manager.switch_api_key():
+        await init_gemini_api()
+        return await init_model()
     
     return False
 
-async def find_best_working_model(silent: bool = False) -> bool:
-    """Находит рабочую модель на текущем API ключе."""
-    global ACTIVE_MODEL, ACTIVE_MODEL_NAME, MODEL_LIMITS
-    
-    candidates = sort_models_priority(get_dynamic_model_list())
-    
-    if not silent:
-        print(f"📋 Проверка моделей на API #{CURRENT_API_KEY_INDEX + 1}")
-    
-    for model_name in candidates:
-        if MODEL_LIMITS.get(model_name, {}).get(CURRENT_API_KEY_INDEX, False):
-            continue
-        
-        try:
-            test_model = genai.GenerativeModel(
-                model_name=model_name,
-                generation_config=generation_config,
-                system_instruction="Ты помощник. Ответь 'ok'."
-            )
-            response = await test_model.generate_content_async("ping")
-            
-            if response and response.text:
-                if not silent:
-                    print(f"✅ Подключено: {model_name}")
-                ACTIVE_MODEL = test_model
-                ACTIVE_MODEL_NAME = model_name
-                return True
-        
-        except Exception as e:
-            err = str(e)
-            if "429" in err:
-                if model_name not in MODEL_LIMITS:
-                    MODEL_LIMITS[model_name] = {}
-                MODEL_LIMITS[model_name][CURRENT_API_KEY_INDEX] = True
-    
-    return False
-
-async def is_addressed_to_bot(message: Message, bot_user: types.User):
+async def is_addressed_to_bot(message: Message, bot_user: types.User) -> bool:
     """Проверяет, адресовано ли сообщение боту."""
     if message.chat.type == "private":
         return True
@@ -315,99 +369,62 @@ async def prepare_prompt_parts(message: Message, bot_user: types.User) -> Tuple[
     
     return prompt_parts, temp_files_to_delete
 
-def get_user_conversation_history(user_id: int) -> List[dict]:
-    """Получает историю диалога пользователя."""
-    return USER_CONVERSATIONS.get(user_id, [])
-
-def add_to_conversation(user_id: int, role: str, content: str):
-    """Добавляет сообщение в историю диалога."""
-    if user_id not in USER_CONVERSATIONS:
-        USER_CONVERSATIONS[user_id] = []
-    
-    USER_CONVERSATIONS[user_id].append({
-        "role": role,
-        "parts": [content]
-    })
-    
-    # Ограничиваем историю 20 сообщениями (10 пар)
-    if len(USER_CONVERSATIONS[user_id]) > 20:
-        USER_CONVERSATIONS[user_id] = USER_CONVERSATIONS[user_id][-20:]
-
-def clear_user_conversation(user_id: int):
-    """Очищает историю диалога пользователя."""
-    if user_id in USER_CONVERSATIONS:
-        del USER_CONVERSATIONS[user_id]
-        print(f"🗑️ История диалога очищена для пользователя {user_id}")
-
-def check_for_triggers(text: str) -> Optional[str]:
-    """
-    Проверяет наличие русских триггеров (ТОЧНОЕ совпадение).
-    Возвращает название триггера или None.
-    """
-    if not text:
-        return None
-    
-    text_lower = text.strip().lower()
-    
-    # Проверяем точное совпадение целого слова
-    words = text_lower.split()
-    
-    for word in words:
-        if word == TRIGGER_DOCTOR:
-            return "doctor"
-        elif word == TRIGGER_GYNECOLOGY:
-            return "gynecology"
-        elif word == TRIGGER_REFRESH:
-            return "refresh"
-    
-    return None
-
-async def process_with_retry(message: Message, bot_user: types.User, text_content: str, 
-                             prompt_parts: List, temp_files: List):
-    """Обработка с retry логикой."""
-    global ACTIVE_MODEL, ACTIVE_MODEL_NAME, CURRENT_MODE
+async def process_message(message: Message, bot_user: types.User, text_content: str, 
+                          prompt_parts: List, user_state: Dict):
+    """Обработка сообщения с управлением моделями."""
+    global model_manager
     
     try:
+        # Сбрасываем лимиты если нужно (каждые 24 часа)
+        model_manager.reset_limits_if_needed()
+        
         # Выбираем системный промт в зависимости от режима
-        if CURRENT_MODE == "medicine_general":
+        if user_state["mode"] == "medicine_general":
             system_prompt = SYSTEM_PROMPT_GENERAL_MEDICINE
             mode_name = "🏥 Общая медицина"
         else:  # gynecology
             system_prompt = SYSTEM_PROMPT_GYNECOLOGY
             mode_name = "🏥 Гинекология"
         
-        print(f"🚀 Запрос в {ACTIVE_MODEL_NAME} [{mode_name}]")
+        print(f"\n📨 Запрос от {message.from_user.id} [{mode_name}]")
+        print(f"   Модель: {model_manager.current_model_name}")
+        print(f"   API: #{model_manager.current_api_key_index + 1}")
         
-        # Получаем историю диалога
-        conversation_history = get_user_conversation_history(message.from_user.id)
+        # Получаем историю диалога пользователя
+        conversation_history = user_state["conversation_history"]
         
-        # Добавляем текущий вопрос в историю
-        if conversation_history:
-            prompt_parts_with_history = conversation_history + [{"role": "user", "parts": prompt_parts}]
-        else:
-            prompt_parts_with_history = [{"role": "user", "parts": prompt_parts}]
-        
-        # Создаём модель с историей
+        # Создаём модель с нужным системным промтом
         current_model = genai.GenerativeModel(
-            model_name=ACTIVE_MODEL_NAME,
+            model_name=model_manager.current_model_name,
             generation_config=generation_config,
             system_instruction=system_prompt
         )
         
-        # Если есть история - используем её
+        # Подготавливаем промт с историей
         if conversation_history:
-            response = await current_model.generate_content_async(
-                prompt_parts_with_history
-            )
+            full_prompt = conversation_history + [{"role": "user", "parts": prompt_parts}]
         else:
-            response = await current_model.generate_content_async(prompt_parts)
+            full_prompt = [{"role": "user", "parts": prompt_parts}]
+        
+        # Отправляем запрос
+        response = await current_model.generate_content_async(full_prompt)
         
         if response.text:
-            print(f"📨 Ответ получен ({len(response.text)} символов)")
+            print(f"✅ Ответ получен ({len(response.text)} символов)")
             
-            # Добавляем ответ в историю
-            add_to_conversation(message.from_user.id, "user", text_content)
-            add_to_conversation(message.from_user.id, "model", response.text)
+            # Добавляем в историю диалога
+            user_state["conversation_history"].append({
+                "role": "user",
+                "parts": [text_content]
+            })
+            user_state["conversation_history"].append({
+                "role": "model",
+                "parts": [response.text]
+            })
+            
+            # Ограничиваем историю (20 сообщений = 10 пар)
+            if len(user_state["conversation_history"]) > 20:
+                user_state["conversation_history"] = user_state["conversation_history"][-20:]
             
             # Обрезаем очень длинные ответы
             answer_text = response.text
@@ -416,43 +433,57 @@ async def process_with_retry(message: Message, bot_user: types.User, text_conten
             
             # Отправляем ответ
             await message.reply(answer_text, parse_mode=ParseMode.MARKDOWN)
-            print(f"✅ Ответ отправлен")
+            print(f"✅ Ответ отправлен пользователю {message.from_user.id}")
             return True
+        
         else:
             await message.reply("⚠️ Пустой ответ от модели")
             return False
     
     except Exception as e:
-        logging.error(f"Gen Error: {e}")
         error_str = str(e)
+        print(f"❌ Ошибка: {error_str[:100]}")
+        logging.error(f"Error: {e}")
         
-        if "429" in error_str or "quota" in error_str or "404" in error_str:
-            if ACTIVE_MODEL_NAME not in MODEL_LIMITS:
-                MODEL_LIMITS[ACTIVE_MODEL_NAME] = {}
-            MODEL_LIMITS[ACTIVE_MODEL_NAME][CURRENT_API_KEY_INDEX] = True
+        # Проверяем ошибку лимита
+        if "429" in error_str or "quota" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+            print(f"⚠️ Лимит на текущей комбинации модель+API")
             
-            print(f"⚠️ Лимит на модели → ищу новую")
+            # Помечаем модель как ограниченную
+            model_manager.mark_model_limited(
+                model_manager.current_model_name,
+                model_manager.current_api_key_index
+            )
             
-            if await find_best_working_model(silent=True):
-                print(f"✅ Новая модель найдена")
-                return await process_with_retry(message, bot_user, text_content, prompt_parts, temp_files)
+            # Ищем другую модель на этом же API
+            next_model = model_manager.get_next_available_model()
             
-            if await switch_api_key(silent=True):
-                print(f"✅ API ключ переключен")
-                return await process_with_retry(message, bot_user, text_content, prompt_parts, temp_files)
+            if next_model and next_model != model_manager.current_model_name:
+                print(f"🔄 Переключаюсь на модель {next_model}")
+                if await create_model(next_model):
+                    # Пробуем снова с новой моделью
+                    return await process_message(message, bot_user, text_content, prompt_parts, user_state)
             
-            await message.reply("❌ Все лимиты исчерпаны. Попробуйте позже.")
+            # Если модель не помогла - переключаемся на API
+            if model_manager.switch_api_key():
+                await init_gemini_api()
+                print(f"🔄 Переключился на API #{model_manager.current_api_key_index + 1}")
+                
+                # Пробуем снова
+                return await process_message(message, bot_user, text_content, prompt_parts, user_state)
+            
+            # Если всё в лимите - отправляем пользователю сообщение
+            await message.reply(
+                "❌ Все лимиты исчерпаны на данный момент.\n"
+                "Лимиты обновляются каждые 24 часа.\n"
+                "Попробуйте позже! 🕐"
+            )
             return False
+        
         else:
+            # Для других ошибок
             await message.reply(f"❌ Ошибка: {error_str[:100]}")
             return False
-    
-    finally:
-        for f_path in temp_files:
-            try:
-                os.remove(f_path)
-            except:
-                pass
 
 # ═══════════════════════════════════════════════════════════════
 # 📝 CALLBACK ХЕНДЛЕРЫ
@@ -461,12 +492,13 @@ async def process_with_retry(message: Message, bot_user: types.User, text_conten
 @dp.callback_query()
 async def handle_mode_callback(query: CallbackQuery):
     """Обработка переключения режимов."""
-    global CURRENT_MODE
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
     
     callback_data = query.data
     
     if callback_data == "mode_general":
-        CURRENT_MODE = "medicine_general"
+        user_state["mode"] = "medicine_general"
         message_text = (
             "🏥 **Режим: Общая медицина**\n\n"
             "**Специализация:** Кардиология, инфекции, пульмология, гастроэнтерология, эндокринология и др.\n\n"
@@ -480,7 +512,7 @@ async def handle_mode_callback(query: CallbackQuery):
         )
         
     elif callback_data == "mode_gyn":
-        CURRENT_MODE = "medicine_gynecology"
+        user_state["mode"] = "medicine_gynecology"
         message_text = (
             "🏥 **Режим: Гинекология и акушерство**\n\n"
             "**Специализация:** Репродуктивная медицина, менструальные расстройства, ВРТ, беременность и т.д.\n\n"
@@ -513,9 +545,11 @@ async def handle_mode_callback(query: CallbackQuery):
 @dp.message(CommandStart())
 async def command_start_handler(message: Message):
     """Стартовое сообщение."""
+    user_id = message.from_user.id
+    user_state = get_user_state(user_id)
     
-    api_info = f" (API #{CURRENT_API_KEY_INDEX + 1}/{len(GOOGLE_KEYS)})" if len(GOOGLE_KEYS) > 1 else ""
-    status = f"✅ `{ACTIVE_MODEL_NAME}`{api_info}" if ACTIVE_MODEL else "💀 Модель не загружена"
+    api_info = f" (API #{model_manager.current_api_key_index + 1}/{len(GOOGLE_KEYS)})"
+    status = f"✅ `{model_manager.current_model_name}`{api_info}" if model_manager.current_model_name else "💀 Модель не загружена"
     
     commands_info = (
         "\n\n📋 **Текущий режим:** 🏥 Общая медицина\n\n"
@@ -531,15 +565,16 @@ async def command_start_handler(message: Message):
     )
     
     await message.answer(
-        f"🏥 **Медицинский Ассистент V2.0**\n{status}{commands_info}",
+        f"🏥 **Медицинский Ассистент V3.0**\n{status}{commands_info}",
         reply_markup=get_mode_buttons()
     )
 
 @dp.message(Command("medic"))
 async def command_medic_handler(message: Message):
     """Включить режим общей медицины."""
-    global CURRENT_MODE
-    CURRENT_MODE = "medicine_general"
+    user_id = message.from_user.id
+    user_state = get_user_state(user_id)
+    user_state["mode"] = "medicine_general"
     
     await message.answer(
         "🏥 **Режим: Общая медицина** ✅\n\n"
@@ -551,8 +586,9 @@ async def command_medic_handler(message: Message):
 @dp.message(Command("gen"))
 async def command_gen_handler(message: Message):
     """Включить режим гинекологии."""
-    global CURRENT_MODE
-    CURRENT_MODE = "medicine_gynecology"
+    user_id = message.from_user.id
+    user_state = get_user_state(user_id)
+    user_state["mode"] = "medicine_gynecology"
     
     await message.answer(
         "🏥 **Режим: Гинекология** ✅\n\n"
@@ -565,7 +601,8 @@ async def command_gen_handler(message: Message):
 async def command_refresh_handler(message: Message):
     """Очистить память диалога."""
     user_id = message.from_user.id
-    clear_user_conversation(user_id)
+    user_state = get_user_state(user_id)
+    user_state["conversation_history"] = []
     
     await message.answer(
         "🗑️ **История диалога очищена**\n\n"
@@ -580,31 +617,31 @@ async def command_refresh_handler(message: Message):
 @dp.message()
 async def main_handler(message: Message):
     """Главный обработчик сообщений."""
-    global ACTIVE_MODEL, ACTIVE_MODEL_NAME, CURRENT_MODE
+    user_id = message.from_user.id
+    user_state = get_user_state(user_id)
     
     # 🔍 ПРОВЕРЯЕМ ТРИГГЕРЫ
     text_to_check = message.text or message.caption or ""
     trigger_result = check_for_triggers(text_to_check)
     
     if trigger_result == "doctor":
-        CURRENT_MODE = "medicine_general"
+        user_state["mode"] = "medicine_general"
         await command_medic_handler(message)
         return
     elif trigger_result == "gynecology":
-        CURRENT_MODE = "medicine_gynecology"
+        user_state["mode"] = "medicine_gynecology"
         await command_gen_handler(message)
         return
     elif trigger_result == "refresh":
         await command_refresh_handler(message)
         return
     
-    # ЗАГРУЖАЕМ МОДЕЛЬ, ЕСЛИ НЕ ЗАГРУЖЕНА
-    if not ACTIVE_MODEL:
+    # ПРОВЕРЯЕМ, ЗАГРУЖЕНА ЛИ МОДЕЛЬ
+    if not model_manager.current_model:
         status_msg = await message.answer("⏳ Загрузка модели...")
-        if not await find_best_working_model(silent=True):
-            if not await switch_api_key(silent=True):
-                await status_msg.edit_text("❌ Не удалось загрузить модель")
-                return
+        if not await init_model():
+            await status_msg.edit_text("❌ Не удалось загрузить модель. Проверьте API ключи.")
+            return
         try:
             await status_msg.delete()
         except:
@@ -625,7 +662,7 @@ async def main_handler(message: Message):
         elif message.caption:
             text_content = message.caption.replace(f"@{bot_user.username}", "").strip()
         
-        print(f"\n📨 Новый запрос: {text_content[:60]}...")
+        print(f"\n📨 Новый запрос от {user_id}: {text_content[:60]}...")
         
         prompt_parts, temp_files_to_delete = await prepare_prompt_parts(message, bot_user)
         
@@ -633,7 +670,7 @@ async def main_handler(message: Message):
             await message.reply("⚠️ Не найден текст или изображение")
             return
         
-        await process_with_retry(message, bot_user, text_content, prompt_parts, temp_files_to_delete)
+        await process_message(message, bot_user, text_content, prompt_parts, user_state)
     
     except Exception as e:
         logging.error(f"Main Handler Error: {e}")
@@ -647,15 +684,19 @@ async def main_handler(message: Message):
 async def root():
     return {
         "status": "Alive",
-        "bot_type": "Medical Assistant",
-        "model": ACTIVE_MODEL_NAME,
-        "mode": "general_medicine" if CURRENT_MODE == "medicine_general" else "gynecology",
-        "api_keys_available": len(GOOGLE_KEYS),
+        "bot_type": "Medical Assistant V3.0",
+        "model": model_manager.current_model_name,
+        "api_key": f"#{model_manager.current_api_key_index + 1}/{len(GOOGLE_KEYS)}",
+        "active_users": len(USER_STATES),
     }
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "model_loaded": ACTIVE_MODEL is not None}
+    return {
+        "status": "ok",
+        "model_loaded": model_manager.current_model is not None,
+        "model_name": model_manager.current_model_name,
+    }
 
 async def keep_alive_ping():
     """Пингует сервер для keep-alive."""
@@ -671,24 +712,16 @@ async def keep_alive_ping():
             pass
 
 async def start_bot():
-    """Запуск бота."""
-    global CURRENT_API_KEY_INDEX
+    """Запуск бота в polling режиме."""
+    print(f"✅ API #{model_manager.current_api_key_index + 1} готов к использованию")
     
-    for i, key in enumerate(GOOGLE_KEYS):
-        try:
-            genai.configure(api_key=key)
-            CURRENT_API_KEY_INDEX = i
-            print(f"✅ API #{i + 1} сконфигурирован")
-            break
-        except:
-            pass
+    print(f"🔍 Инициализирую модель...")
+    if not await init_model():
+        print(f"⚠️ Не удалось загрузить модель, но продолжаю работу...")
     
-    print(f"🔍 Ищу рабочую модель...")
-    await find_best_working_model()
-    
-    print(f"🤖 Запуск бота...")
+    print(f"🤖 Запуск бота в polling режиме...")
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 async def start_server():
     """Запуск FastAPI сервера."""
@@ -698,6 +731,12 @@ async def start_server():
 
 async def main():
     """Главная точка входа."""
+    # Инициализируем Gemini API
+    if not await init_gemini_api():
+        print("❌ Не удалось инициализировать Gemini API")
+        sys.exit(1)
+    
+    # Запускаем все компоненты
     await asyncio.gather(
         start_server(),
         start_bot(),
