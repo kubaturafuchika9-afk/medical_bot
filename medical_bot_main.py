@@ -135,7 +135,7 @@ SYSTEM_PROMPT_GYNECOLOGY = """Ты — клинический ассистент
 # ═══════════════════════════════════════════════════════════════
 
 generation_config = {
-    "temperature": 0.2,      # Низкая креативность - максимум фактичность
+    "temperature": 0.2,
     "top_p": 0.8,
     "top_k": 40,
     "max_output_tokens": 4096,
@@ -148,14 +148,13 @@ generation_config = {
 class ModelManager:
     """Управляет доступными моделями и их лимитами."""
     
-    # Приоритет использования моделей
     MODEL_PRIORITY = [
-        "gemini-2.5-flash",      # Первый выбор
-        "gemini-2.5-flash-lite", # Альтернатива при лимитах
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
     ]
     
     def __init__(self):
-        self.api_key_limits = {}  # {api_index: {model: is_limited}}
+        self.api_key_limits = {}
         self.current_api_key_index = 0
         self.current_model = None
         self.current_model_name = None
@@ -165,12 +164,11 @@ class ModelManager:
         """Возвращает первую доступную модель с учётом лимитов."""
         current_api = self.current_api_key_index
         
-        # Проверяем модели в порядке приоритета
         for model in self.MODEL_PRIORITY:
             if not self.is_model_limited(model, current_api):
                 return model
         
-        return None  # Все модели в лимите
+        return None
     
     def is_model_limited(self, model: str, api_index: int) -> bool:
         """Проверяет, ограничена ли модель на данном API ключе."""
@@ -194,7 +192,7 @@ class ModelManager:
         for i in range(len(GOOGLE_KEYS)):
             next_index = (self.current_api_key_index + 1) % len(GOOGLE_KEYS)
             if next_index == old_index:
-                return False  # Полный круг - все API в лимите
+                return False
             
             self.current_api_key_index = next_index
             print(f"🔄 Переключаюсь на API #{next_index + 1}")
@@ -207,7 +205,6 @@ class ModelManager:
         now = datetime.now(MSK_TZ)
         time_since_reset = now - self.last_limit_reset
         
-        # Сбрасываем каждые 24 часа
         if time_since_reset.total_seconds() > 86400:
             self.api_key_limits = {}
             self.last_limit_reset = now
@@ -225,15 +222,14 @@ app = FastAPI()
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-# ПОЛЬЗОВАТЕЛЬСКИЕ СОСТОЯНИЯ (user_id -> данные)
 USER_STATES = {}
 
 def get_user_state(user_id: int) -> Dict:
     """Получает или создаёт состояние пользователя."""
     if user_id not in USER_STATES:
         USER_STATES[user_id] = {
-            "mode": "medicine_general",  # medicine_general или medicine_gynecology
-            "conversation_history": [],  # История диалога
+            "mode": "medicine_general",
+            "conversation_history": [],
             "last_activity": datetime.now(MSK_TZ)
         }
     
@@ -241,17 +237,15 @@ def get_user_state(user_id: int) -> Dict:
     return USER_STATES[user_id]
 
 # ═══════════════════════════════════════════════════════════════
-# 🎯 РУССКИЕ ТРИГГЕРЫ (ТОЧНОЕ СОВПАДЕНИЕ)
+# 🎯 РУССКИЕ ТРИГГЕРЫ
 # ═══════════════════════════════════════════════════════════════
 
-TRIGGER_DOCTOR = "!врач"         # Режим общей медицины
-TRIGGER_GYNECOLOGY = "!гениколог" # Режим гинекологии
-TRIGGER_REFRESH = "!обнови"      # Очистить память диалога
+TRIGGER_DOCTOR = "!врач"
+TRIGGER_GYNECOLOGY = "!гениколог"
+TRIGGER_REFRESH = "!обнови"
 
 def check_for_triggers(text: str) -> Optional[str]:
-    """
-    Проверяет наличие русских триггеров (ТОЧНОЕ совпадение).
-    """
+    """Проверяет наличие русских триггеров."""
     if not text:
         return None
     
@@ -282,33 +276,10 @@ def get_mode_buttons() -> InlineKeyboardMarkup:
     ])
     return keyboard
 
-async def init_gemini_api():
-    """Инициализирует Google Generative AI API."""
-    try:
-        genai.configure(api_key=GOOGLE_KEYS[model_manager.current_api_key_index])
-        print(f"✅ API #{model_manager.current_api_key_index + 1} сконфигурирован")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка конфигурации API: {e}")
-        return False
-
-async def create_model(model_name: str):
-    """Создаёт экземпляр модели Gemini."""
-    try:
-        model_manager.current_model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config=generation_config,
-            system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE  # По умолчанию
-        )
-        model_manager.current_model_name = model_name
-        print(f"✅ Модель {model_name} готова")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка создания модели: {e}")
-        return False
-
 async def init_model():
-    """Инициализирует модель при запуске бота."""
+    """✅ ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ РЕКУРСИИ"""
+    print("\n🔍 Инициализация модели...")
+    
     # Пробуем все API ключи и модели
     for api_index in range(len(GOOGLE_KEYS)):
         model_manager.current_api_key_index = api_index
@@ -333,13 +304,12 @@ async def init_model():
                 )
                 model_manager.current_model_name = model_name
                 print(f"✅ Модель {model_name} готова")
-                return True  # УСПЕХ!
+                return True
                 
             except Exception as e:
                 print(f"❌ Ошибка создания модели: {e}")
-                continue  # Пробуем следующую модель
+                continue
     
-    # Если ничего не сработало
     print("❌ Не удалось инициализировать ни одну модель")
     return False
 
@@ -392,14 +362,12 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
     global model_manager
     
     try:
-        # Сбрасываем лимиты если нужно (каждые 24 часа)
         model_manager.reset_limits_if_needed()
         
-        # Выбираем системный промт в зависимости от режима
         if user_state["mode"] == "medicine_general":
             system_prompt = SYSTEM_PROMPT_GENERAL_MEDICINE
             mode_name = "🏥 Общая медицина"
-        else:  # gynecology
+        else:
             system_prompt = SYSTEM_PROMPT_GYNECOLOGY
             mode_name = "🏥 Гинекология"
         
@@ -407,29 +375,24 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
         print(f"   Модель: {model_manager.current_model_name}")
         print(f"   API: #{model_manager.current_api_key_index + 1}")
         
-        # Получаем историю диалога пользователя
         conversation_history = user_state["conversation_history"]
         
-        # Создаём модель с нужным системным промтом
         current_model = genai.GenerativeModel(
             model_name=model_manager.current_model_name,
             generation_config=generation_config,
             system_instruction=system_prompt
         )
         
-        # Подготавливаем промт с историей
         if conversation_history:
             full_prompt = conversation_history + [{"role": "user", "parts": prompt_parts}]
         else:
             full_prompt = [{"role": "user", "parts": prompt_parts}]
         
-        # Отправляем запрос
         response = await current_model.generate_content_async(full_prompt)
         
         if response.text:
             print(f"✅ Ответ получен ({len(response.text)} символов)")
             
-            # Добавляем в историю диалога
             user_state["conversation_history"].append({
                 "role": "user",
                 "parts": [text_content]
@@ -439,16 +402,13 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
                 "parts": [response.text]
             })
             
-            # Ограничиваем историю (20 сообщений = 10 пар)
             if len(user_state["conversation_history"]) > 20:
                 user_state["conversation_history"] = user_state["conversation_history"][-20:]
             
-            # Обрезаем очень длинные ответы
             answer_text = response.text
             if len(answer_text) > 4000:
                 answer_text = answer_text[:3900] + "\n\n⚠️ Ответ обрезан из-за длины."
             
-            # Отправляем ответ
             await message.reply(answer_text, parse_mode=ParseMode.MARKDOWN)
             print(f"✅ Ответ отправлен пользователю {message.from_user.id}")
             return True
@@ -462,34 +422,29 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
         print(f"❌ Ошибка: {error_str[:100]}")
         logging.error(f"Error: {e}")
         
-        # Проверяем ошибку лимита
         if "429" in error_str or "quota" in error_str or "RESOURCE_EXHAUSTED" in error_str:
             print(f"⚠️ Лимит на текущей комбинации модель+API")
             
-            # Помечаем модель как ограниченную
             model_manager.mark_model_limited(
                 model_manager.current_model_name,
                 model_manager.current_api_key_index
             )
             
-            # Ищем другую модель на этом же API
             next_model = model_manager.get_next_available_model()
             
             if next_model and next_model != model_manager.current_model_name:
                 print(f"🔄 Переключаюсь на модель {next_model}")
-                if await create_model(next_model):
-                    # Пробуем снова с новой моделью
-                    return await process_message(message, bot_user, text_content, prompt_parts, user_state)
-            
-            # Если модель не помогла - переключаемся на API
-            if model_manager.switch_api_key():
-                await init_gemini_api()
-                print(f"🔄 Переключился на API #{model_manager.current_api_key_index + 1}")
-                
-                # Пробуем снова
+                model_manager.current_model_name = next_model
                 return await process_message(message, bot_user, text_content, prompt_parts, user_state)
             
-            # Если всё в лимите - отправляем пользователю сообщение
+            if model_manager.switch_api_key():
+                try:
+                    genai.configure(api_key=GOOGLE_KEYS[model_manager.current_api_key_index])
+                    print(f"🔄 Переключился на API #{model_manager.current_api_key_index + 1}")
+                    return await process_message(message, bot_user, text_content, prompt_parts, user_state)
+                except:
+                    pass
+            
             await message.reply(
                 "❌ Все лимиты исчерпаны на данный момент.\n"
                 "Лимиты обновляются каждые 24 часа.\n"
@@ -498,7 +453,6 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
             return False
         
         else:
-            # Для других ошибок
             await message.reply(f"❌ Ошибка: {error_str[:100]}")
             return False
 
@@ -637,7 +591,6 @@ async def main_handler(message: Message):
     user_id = message.from_user.id
     user_state = get_user_state(user_id)
     
-    # 🔍 ПРОВЕРЯЕМ ТРИГГЕРЫ
     text_to_check = message.text or message.caption or ""
     trigger_result = check_for_triggers(text_to_check)
     
@@ -653,7 +606,6 @@ async def main_handler(message: Message):
         await command_refresh_handler(message)
         return
     
-    # ПРОВЕРЯЕМ, ЗАГРУЖЕНА ЛИ МОДЕЛЬ
     if not model_manager.current_model:
         status_msg = await message.answer("⏳ Загрузка модели...")
         if not await init_model():
@@ -718,15 +670,16 @@ async def health_check():
 async def keep_alive_ping():
     """Пингует сервер для keep-alive."""
     if not RENDER_URL:
+        print("⚠️ RENDER_URL не установлен, keep-alive отключен")
         return
     while True:
         await asyncio.sleep(300)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{RENDER_URL}/health") as resp:
-                    pass
-        except:
-            pass
+                    print(f"🏓 Keep-alive ping: {resp.status}")
+        except Exception as e:
+            print(f"⚠️ Keep-alive ping ошибка: {e}")
 
 async def start_bot():
     """Запуск бота в polling режиме."""
@@ -748,12 +701,16 @@ async def start_server():
 
 async def main():
     """Главная точка входа."""
-    # Инициализируем Gemini API
-    if not await init_gemini_api():
-        print("❌ Не удалось инициализировать Gemini API")
+    print("=" * 50)
+    print("🚀 ЗАПУСК МЕДИЦИНСКОГО АССИСТЕНТА V3.0")
+    print("=" * 50)
+    
+    if not GOOGLE_KEYS:
+        print("❌ ОШИБКА: Google API ключи не установлены!")
         sys.exit(1)
     
-    # Запускаем все компоненты
+    print(f"✅ Найдено {len(GOOGLE_KEYS)} API ключей")
+    
     await asyncio.gather(
         start_server(),
         start_bot(),
