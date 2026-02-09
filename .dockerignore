@@ -1,7 +1,5 @@
-__pycache__/
+__pycache__
 *.pyc
-.env
+.git
 .env.local
-*.log
 .DS_Store
-venv/
