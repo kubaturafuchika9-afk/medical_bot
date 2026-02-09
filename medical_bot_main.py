@@ -4,9 +4,8 @@ import logging
 import sys
 from io import BytesIO
 from typing import Optional, List, Dict, Tuple
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
-import json
 
 import uvicorn
 from fastapi import FastAPI
@@ -38,7 +37,13 @@ RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 GOOGLE_KEYS = [k for k in GOOGLE_KEYS if k]
 
-# Временная зона
+generation_config = {
+    "temperature": 0.2,
+    "top_p": 0.8,
+    "top_k": 40,
+    "max_output_tokens": 4096,
+}
+
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 # ═══════════════════════════════════════════════════════════════
@@ -131,84 +136,87 @@ SYSTEM_PROMPT_GYNECOLOGY = """Ты — клинический ассистент
 - Таблицы для наглядности"""
 
 # ═══════════════════════════════════════════════════════════════
-# 🔧 КОНФИГУРАЦИЯ ГЕНЕРАЦИИ
-# ═══════════════════════════════════════════════════════════════
-
-generation_config = {
-    "temperature": 0.2,
-    "top_p": 0.8,
-    "top_k": 40,
-    "max_output_tokens": 4096,
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ С ЛИМИТАМИ
+# 🤖 СИСТЕМА УПРАВЛЕНИЯ МОДЕЛЯМИ
 # ═══════════════════════════════════════════════════════════════
 
 class ModelManager:
     """Управляет доступными моделями и их лимитами."""
     
-    MODEL_PRIORITY = [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-    ]
-    
     def __init__(self):
-        self.api_key_limits = {}
-        self.current_api_key_index = 0
+        self.api_key_index = 0
         self.current_model = None
-        self.current_model_name = None
-        self.last_limit_reset = datetime.now(MSK_TZ)
+        self.current_model_name = "Searching..."
+        self.model_limits = {}
     
-    def get_next_available_model(self) -> Optional[str]:
-        """Возвращает первую доступную модель с учётом лимитов."""
-        current_api = self.current_api_key_index
+    def get_models(self):
+        """Получает список доступных моделей."""
+        models = []
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    name = m.name.replace("models/", "")
+                    if "gemini" in name:
+                        models.append(name)
+        except:
+            pass
         
-        for model in self.MODEL_PRIORITY:
-            if not self.is_model_limited(model, current_api):
-                return model
+        # Fallback модели
+        fallback = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+        for m in fallback:
+            if m not in models:
+                models.append(m)
         
-        return None
+        return models
     
-    def is_model_limited(self, model: str, api_index: int) -> bool:
-        """Проверяет, ограничена ли модель на данном API ключе."""
-        if api_index not in self.api_key_limits:
-            self.api_key_limits[api_index] = {}
+    async def find_working_model(self):
+        """Находит рабочую модель на текущем API ключе."""
+        models = self.get_models()
         
-        return self.api_key_limits[api_index].get(model, False)
-    
-    def mark_model_limited(self, model: str, api_index: int):
-        """Помечает модель как ограниченную."""
-        if api_index not in self.api_key_limits:
-            self.api_key_limits[api_index] = {}
-        
-        self.api_key_limits[api_index][model] = True
-        print(f"⚠️ Модель {model} на API #{api_index + 1} в лимите")
-    
-    def switch_api_key(self) -> bool:
-        """Переключается на следующий API ключ."""
-        old_index = self.current_api_key_index
-        
-        for i in range(len(GOOGLE_KEYS)):
-            next_index = (self.current_api_key_index + 1) % len(GOOGLE_KEYS)
-            if next_index == old_index:
-                return False
+        for model_name in models:
+            if self.model_limits.get(model_name, {}).get(self.api_key_index, False):
+                continue
             
-            self.current_api_key_index = next_index
-            print(f"🔄 Переключаюсь на API #{next_index + 1}")
-            return True
+            try:
+                test_model = genai.GenerativeModel(
+                    model_name=model_name,
+                    generation_config=generation_config,
+                    system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE
+                )
+                response = await test_model.generate_content_async("test")
+                
+                if response and response.text:
+                    self.current_model = test_model
+                    self.current_model_name = model_name
+                    print(f"✅ Модель: {model_name}")
+                    return True
+            except Exception as e:
+                if "429" in str(e):
+                    if model_name not in self.model_limits:
+                        self.model_limits[model_name] = {}
+                    self.model_limits[model_name][self.api_key_index] = True
         
         return False
     
-    def reset_limits_if_needed(self):
-        """Сбрасывает лимиты, если прошли 24 часа."""
-        now = datetime.now(MSK_TZ)
-        time_since_reset = now - self.last_limit_reset
+    async def switch_api(self):
+        """Переключает на следующий API ключ."""
+        old_index = self.api_key_index
         
-        if time_since_reset.total_seconds() > 86400:
-            self.api_key_limits = {}
-            self.last_limit_reset = now
-            print(f"🔄 Лимиты сброшены! (24 часа прошли)")
+        for i in range(len(GOOGLE_KEYS)):
+            next_index = (self.api_key_index + 1) % len(GOOGLE_KEYS)
+            if next_index == old_index:
+                return False
+            
+            self.api_key_index = next_index
+            try:
+                genai.configure(api_key=GOOGLE_KEYS[self.api_key_index])
+                print(f"🔄 API #{self.api_key_index + 1}")
+                
+                if await self.find_working_model():
+                    return True
+            except:
+                pass
+        
+        return False
 
 model_manager = ModelManager()
 
@@ -276,43 +284,6 @@ def get_mode_buttons() -> InlineKeyboardMarkup:
     ])
     return keyboard
 
-async def init_model():
-    """✅ ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ РЕКУРСИИ"""
-    print("\n🔍 Инициализация модели...")
-    
-    # Пробуем все API ключи и модели
-    for api_index in range(len(GOOGLE_KEYS)):
-        model_manager.current_api_key_index = api_index
-        
-        # Инициализируем API
-        try:
-            genai.configure(api_key=GOOGLE_KEYS[api_index])
-            print(f"✅ API #{api_index + 1} сконфигурирован")
-        except Exception as e:
-            print(f"❌ Ошибка конфигурации API #{api_index + 1}: {e}")
-            continue
-        
-        # Пробуем модели по приоритету
-        for model_name in model_manager.MODEL_PRIORITY:
-            print(f"🤖 Пробую модель: {model_name}")
-            
-            try:
-                model_manager.current_model = genai.GenerativeModel(
-                    model_name=model_name,
-                    generation_config=generation_config,
-                    system_instruction=SYSTEM_PROMPT_GENERAL_MEDICINE
-                )
-                model_manager.current_model_name = model_name
-                print(f"✅ Модель {model_name} готова")
-                return True
-                
-            except Exception as e:
-                print(f"❌ Ошибка создания модели: {e}")
-                continue
-    
-    print("❌ Не удалось инициализировать ни одну модель")
-    return False
-
 async def is_addressed_to_bot(message: Message, bot_user: types.User) -> bool:
     """Проверяет, адресовано ли сообщение боту."""
     if message.chat.type == "private":
@@ -358,12 +329,8 @@ async def prepare_prompt_parts(message: Message, bot_user: types.User) -> Tuple[
 
 async def process_message(message: Message, bot_user: types.User, text_content: str, 
                           prompt_parts: List, user_state: Dict):
-    """Обработка сообщения с управлением моделями."""
-    global model_manager
-    
+    """Обработка сообщения."""
     try:
-        model_manager.reset_limits_if_needed()
-        
         if user_state["mode"] == "medicine_general":
             system_prompt = SYSTEM_PROMPT_GENERAL_MEDICINE
             mode_name = "🏥 Общая медицина"
@@ -373,7 +340,6 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
         
         print(f"\n📨 Запрос от {message.from_user.id} [{mode_name}]")
         print(f"   Модель: {model_manager.current_model_name}")
-        print(f"   API: #{model_manager.current_api_key_index + 1}")
         
         conversation_history = user_state["conversation_history"]
         
@@ -410,7 +376,7 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
                 answer_text = answer_text[:3900] + "\n\n⚠️ Ответ обрезан из-за длины."
             
             await message.reply(answer_text, parse_mode=ParseMode.MARKDOWN)
-            print(f"✅ Ответ отправлен пользователю {message.from_user.id}")
+            print(f"✅ Ответ отправлен")
             return True
         
         else:
@@ -420,30 +386,13 @@ async def process_message(message: Message, bot_user: types.User, text_content: 
     except Exception as e:
         error_str = str(e)
         print(f"❌ Ошибка: {error_str[:100]}")
-        logging.error(f"Error: {e}")
         
         if "429" in error_str or "quota" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-            print(f"⚠️ Лимит на текущей комбинации модель+API")
+            print(f"⚠️ Лимит")
             
-            model_manager.mark_model_limited(
-                model_manager.current_model_name,
-                model_manager.current_api_key_index
-            )
-            
-            next_model = model_manager.get_next_available_model()
-            
-            if next_model and next_model != model_manager.current_model_name:
-                print(f"🔄 Переключаюсь на модель {next_model}")
-                model_manager.current_model_name = next_model
+            if await model_manager.switch_api():
+                await model_manager.find_working_model()
                 return await process_message(message, bot_user, text_content, prompt_parts, user_state)
-            
-            if model_manager.switch_api_key():
-                try:
-                    genai.configure(api_key=GOOGLE_KEYS[model_manager.current_api_key_index])
-                    print(f"🔄 Переключился на API #{model_manager.current_api_key_index + 1}")
-                    return await process_message(message, bot_user, text_content, prompt_parts, user_state)
-                except:
-                    pass
             
             await message.reply(
                 "❌ Все лимиты исчерпаны на данный момент.\n"
@@ -519,8 +468,8 @@ async def command_start_handler(message: Message):
     user_id = message.from_user.id
     user_state = get_user_state(user_id)
     
-    api_info = f" (API #{model_manager.current_api_key_index + 1}/{len(GOOGLE_KEYS)})"
-    status = f"✅ `{model_manager.current_model_name}`{api_info}" if model_manager.current_model_name else "💀 Модель не загружена"
+    api_info = f" (API #{model_manager.api_key_index + 1}/{len(GOOGLE_KEYS)})"
+    status = f"✅ `{model_manager.current_model_name}`{api_info}" if model_manager.current_model_name != "Searching..." else "💀 Модель загружается..."
     
     commands_info = (
         "\n\n📋 **Текущий режим:** 🏥 Общая медицина\n\n"
@@ -531,12 +480,11 @@ async def command_start_handler(message: Message):
         "**Как использовать:**\n"
         "1. Выберите режим (команда или триггер)\n"
         "2. Напишите вопрос\n"
-        "3. Бот запомнит контекст для следующих вопросов\n"
-        "4. /refresh чтобы забыть всё и начать заново"
+        "3. Бот запомнит контекст для следующих вопросов"
     )
     
     await message.answer(
-        f"🏥 **Медицинский Ассистент V3.0**\n{status}{commands_info}",
+        f"🏥 **Медицинский Ассистент V4.0**\n{status}{commands_info}",
         reply_markup=get_mode_buttons()
     )
 
@@ -608,7 +556,7 @@ async def main_handler(message: Message):
     
     if not model_manager.current_model:
         status_msg = await message.answer("⏳ Загрузка модели...")
-        if not await init_model():
+        if not await model_manager.find_working_model():
             await status_msg.edit_text("❌ Не удалось загрузить модель. Проверьте API ключи.")
             return
         try:
@@ -653,9 +601,9 @@ async def main_handler(message: Message):
 async def root():
     return {
         "status": "Alive",
-        "bot_type": "Medical Assistant V3.0",
+        "bot_type": "Medical Assistant V4.0",
         "model": model_manager.current_model_name,
-        "api_key": f"#{model_manager.current_api_key_index + 1}/{len(GOOGLE_KEYS)}",
+        "api_key": f"#{model_manager.api_key_index + 1}/{len(GOOGLE_KEYS)}",
         "active_users": len(USER_STATES),
     }
 
@@ -670,23 +618,22 @@ async def health_check():
 async def keep_alive_ping():
     """Пингует сервер для keep-alive."""
     if not RENDER_URL:
-        print("⚠️ RENDER_URL не установлен, keep-alive отключен")
         return
     while True:
         await asyncio.sleep(300)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{RENDER_URL}/health") as resp:
-                    print(f"🏓 Keep-alive ping: {resp.status}")
-        except Exception as e:
-            print(f"⚠️ Keep-alive ping ошибка: {e}")
+                    pass
+        except:
+            pass
 
 async def start_bot():
     """Запуск бота в polling режиме."""
-    print(f"✅ API #{model_manager.current_api_key_index + 1} готов к использованию")
+    print(f"✅ API #{model_manager.api_key_index + 1} готов к использованию")
     
     print(f"🔍 Инициализирую модель...")
-    if not await init_model():
+    if not await model_manager.find_working_model():
         print(f"⚠️ Не удалось загрузить модель, но продолжаю работу...")
     
     print(f"🤖 Запуск бота в polling режиме...")
@@ -702,7 +649,7 @@ async def start_server():
 async def main():
     """Главная точка входа."""
     print("=" * 50)
-    print("🚀 ЗАПУСК МЕДИЦИНСКОГО АССИСТЕНТА V3.0")
+    print("🚀 ЗАПУСК МЕДИЦИНСКОГО АССИСТЕНТА V4.0")
     print("=" * 50)
     
     if not GOOGLE_KEYS:
@@ -710,6 +657,14 @@ async def main():
         sys.exit(1)
     
     print(f"✅ Найдено {len(GOOGLE_KEYS)} API ключей")
+    
+    # Инициализируем первый API ключ
+    try:
+        genai.configure(api_key=GOOGLE_KEYS[model_manager.api_key_index])
+        print(f"✅ API #{model_manager.api_key_index + 1} сконфигурирован")
+    except Exception as e:
+        print(f"❌ Ошибка конфигурации API: {e}")
+        sys.exit(1)
     
     await asyncio.gather(
         start_server(),
